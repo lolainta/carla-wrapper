@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-service CarlaSim {
-  rpc Ping(Empty) returns (Pong);
-}
-
-message Empty {}
-message Pong { string msg = 1; }

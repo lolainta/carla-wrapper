@@ -4,8 +4,13 @@ version = "0.1.0"
 description = "A carla wrapper for SBSVS"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = ["grpcio>=1.76.0", "grpcio-tools>=1.76.0"]
+dependencies = [
+    "carla-api",
+]
 
 [tool.setuptools.packages.find]
 include = ["carla_wrapper*"]
 exclude = ["proto*"]
+
+[tool.uv.sources]
+carla-api = { git = "https://github.com/lolainta/carla-api.git" }
