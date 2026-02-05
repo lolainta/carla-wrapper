@@ -1,0 +1,10 @@
+[project]
+name = "carla-wrapper"
+version = "0.1.0"
+description = "A carla wrapper for SBSVS"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "grpcio>=1.76.0",
+    "grpcio-tools>=1.76.0",
+]
