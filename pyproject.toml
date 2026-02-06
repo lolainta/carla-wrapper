@@ -3,8 +3,9 @@ name = "carla-wrapper"
 version = "0.1.0"
 description = "A carla wrapper for SBSVS"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
+    "carla",
     "carla-api",
 ]
 
@@ -14,3 +15,4 @@ exclude = ["proto*"]
 
 [tool.uv.sources]
 carla-api = { git = "https://github.com/lolainta/carla-api.git" }
+carla = { path = "../workspace/PythonAPI/carla/dist/carla-0.9.16-cp312-cp312-manylinux_2_31_x86_64.whl" }
