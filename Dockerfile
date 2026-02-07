@@ -13,3 +13,6 @@ RUN uv add /workspace/PythonAPI/carla/dist/carla-0.9.16-cp310-cp310-manylinux_2_
 RUN uv add -r /scenario_runner/requirements.txt
 RUN uv add /carla-api/
 ENV PYTHONPATH=/scenario_runner/:/workspace/PythonAPI/carla/
+
+EXPOSE 50051
+ENTRYPOINT [ "./entrypoint.sh" ]
