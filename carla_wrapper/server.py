@@ -2,9 +2,11 @@ from asyncio.log import logger
 import grpc
 from concurrent import futures
 import time
-from typing import Union, Optional
+from typing import Optional
 from pathlib import Path
 import os
+import math
+from google.protobuf.json_format import MessageToDict
 
 
 import carla
@@ -43,30 +45,35 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 
     def Init(self, request, context):
         self.config = request.config.config
+        self.config = MessageToDict(request.config.config)
+        print("CARLA config:", self.config)
+
         self._fixed_delta_seconds = request.dt
         self._connect()
 
-        self._sync = bool(self.cfg.get("synchronous_mode", True))
-        self._no_rendering = bool(self.cfg.get("no_rendering_mode", False))
-        self._yaw_sign = float(self.cfg.get("yaw_sign", 1.0))
-        self._yaw_offset_deg = float(self.cfg.get("yaw_offset_deg", 0.0))
-        self._spawn_z_offset = float(self.cfg.get("spawn_z_offset", 3.0))
+        self._sync = bool(self.config.get("synchronous_mode", True))
+        self._no_rendering = bool(self.config.get("no_rendering_mode", False))
+        self._yaw_sign = float(self.config.get("yaw_sign", 1.0))
+        self._yaw_offset_deg = float(self.config.get("yaw_offset_deg", 0.0))
+        self._spawn_z_offset = float(self.config.get("spawn_z_offset", 3.0))
 
-        self._ego_bp_id = self.cfg.get("ego_vehicle_bp", "vehicle.tesla.model3")
+        self._ego_bp_id = self.config.get("ego_vehicle_bp", "vehicle.tesla.model3")
         self._max_steer_rad: Optional[float] = None
         self._quit_flag = False
 
         self._spawned_actor_ids: set[int] = set()
-        self._scenario_runner_path = self.cfg.get("scenario_runner_path", None)
-        self._ego_role_name = self.cfg.get("ego_role_name", "hero")
-        self._carla_root = self.cfg.get("carla_root", None)
-        self._carla_egg = self.cfg.get("carla_egg", None)
-        self._carla_cache_dir = self.cfg.get("carla_cache_dir", "/tmp/carla_pyapi")
+        self._scenario_runner_path = self.config.get("scenario_runner_path", None)
+        self._ego_role_name = self.config.get("ego_role_name", "hero")
+        self._carla_root = self.config.get("carla_root", None)
+        self._carla_egg = self.config.get("carla_egg", None)
+        self._carla_cache_dir = self.config.get("carla_cache_dir", "/tmp/carla_pyapi")
         # )
         self._scenario_runner_tm_port = int(
-            self.cfg.get("scenario_runner_tm_port", 8000)
+            self.config.get("scenario_runner_tm_port", 8000)
         )
-        self._scenario_runner_tm_seed = int(self.cfg.get("scenario_runner_tm_seed", 0))
+        self._scenario_runner_tm_seed = int(
+            self.config.get("scenario_runner_tm_seed", 0)
+        )
 
         self._sr_manager = None
         self._sr_scenario = None
@@ -140,11 +147,12 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         if self.client is None:
             print("Connecting to CARLA...")
             self.client = carla.Client(
-                self.config.get("host", "localhost"), self.config.get("port", 2000)
+                self.config.get("host", "localhost"), int(self.config.get("port", 2000))
             )
             self.client.set_timeout(self.config.get("timeout", 10.0))
             self.world = self.client.get_world()
             print("Connected to CARLA")
+        print(self.client.get_server_version())
 
     def _to_carla_yaw(self, yaw_rad: float) -> float:
         return self._yaw_sign * math.degrees(yaw_rad) + self._yaw_offset_deg
@@ -386,17 +394,19 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         )
 
         ego_vehicles = []
-        for ego_cfg in config.ego_vehicles:
+        for ego_config in config.ego_vehicles:
             actor = CarlaDataProvider.request_new_actor(
-                ego_cfg.model,
-                ego_cfg.transform,
-                ego_cfg.rolename,
-                random_location=ego_cfg.random_location,
-                color=ego_cfg.color,
-                actor_category=ego_cfg.category,
+                ego_config.model,
+                ego_config.transform,
+                ego_config.rolename,
+                random_location=ego_config.random_location,
+                color=ego_config.color,
+                actor_category=ego_config.category,
             )
             if actor is None:
-                raise RuntimeError(f"Failed to spawn ego vehicle '{ego_cfg.rolename}'")
+                raise RuntimeError(
+                    f"Failed to spawn ego vehicle '{ego_config.rolename}'"
+                )
             ego_vehicles.append(actor)
 
         scenario = OpenScenario(
@@ -654,8 +664,8 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
                 steer = _clamp(steering_angle, -1.0, 1.0)
 
             cur_speed = self._get_forward_speed(self._ego_vehicle)
-            kp = float(self.cfg.get("speed_kp", 0.5))
-            kb = float(self.cfg.get("brake_kp", kp))
+            kp = float(self.config.get("speed_kp", 0.5))
+            kb = float(self.config.get("brake_kp", kp))
             speed_err = target_speed - cur_speed
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
             brake = _clamp(-speed_err * kb, 0.0, 1.0)
