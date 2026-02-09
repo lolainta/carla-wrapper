@@ -1,6 +1,6 @@
 #!/bin/bash
 pushd /workspace/
-su carla -c "./CarlaUE4.sh -RenderOffScreen &"
+./CarlaUE4.sh -RenderOffScreen -carla-port=${CARLA_PORT:-2000} &
 sleep 2
 popd
 pushd /app

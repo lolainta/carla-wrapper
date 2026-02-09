@@ -4,6 +4,7 @@ from concurrent import futures
 import time
 from typing import Union, Optional
 from pathlib import Path
+import os
 
 
 import carla
@@ -691,10 +692,12 @@ def serve():
 
     carla_pb2_grpc.add_CarlaSimServicer_to_server(CarlaService(), server)
 
-    server.add_insecure_port("[::]:50051")
+    PORT = os.environ.get("PORT", "50051")
+
+    server.add_insecure_port(f"[::]:{PORT}")
     server.start()
 
-    print("gRPC server running on port 50051")
+    print(f"gRPC server running on port {PORT}")
 
     try:
         while True:
