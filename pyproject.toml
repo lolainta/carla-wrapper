@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = "==3.10.*"
 dependencies = [
     "antlr4-python3-runtime==4.10",
+    "carla-api",
     "ephem>=4.2",
     "graphviz>=0.21",
     "matplotlib>=3.10.8",
@@ -24,3 +25,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["carla_wrapper*"]
 exclude = ["proto*"]
+
+[tool.uv.sources]
+carla-api = { git = "https://github.com/lolainta/carla-api.git" }
