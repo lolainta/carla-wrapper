@@ -7,10 +7,11 @@ from pathlib import Path
 import os
 import math
 from google.protobuf.json_format import MessageToDict
-
+from pprint import pprint
 
 import carla
-from carla_api import carla_pb2, carla_pb2_grpc, scenario_pb2
+
+from carla_api import carla_pb2, carla_pb2_grpc
 from carla_api.scenario_pb2 import ScenarioPack
 from carla_api.object_pb2 import (
     ObjectState,
@@ -25,20 +26,26 @@ from srunner.scenarioconfigs.openscenario_configuration import (
     OpenScenarioConfiguration,
 )
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
-from srunner.scenariomanager.scenario_manager import ScenarioManager
 from srunner.scenariomanager.timer import GameTime
-from srunner.scenariomanager.watchdog import Watchdog
 from srunner.scenarios.open_scenario import OpenScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 import py_trees
 
 
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
 class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     def __init__(self):
-        self.client = None
-        self.world = None
+        self._client = None
+        self._world = None
         self.config = None
+        self._original_settings = None
+
+        self._objects_by_id = {}
+        self._prev_yaw_rate = {}
 
     def Ping(self, request, context):
         return carla_pb2.Pong(msg="CARLA alive")
@@ -46,7 +53,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     def Init(self, request, context):
         self.config = request.config.config
         self.config = MessageToDict(request.config.config)
-        print("CARLA config:", self.config)
+        pprint(self.config)
 
         self._fixed_delta_seconds = request.dt
         self._connect()
@@ -144,15 +151,15 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         return carla_pb2.ShouldQuitResponse(should_quit=self._quit_flag)
 
     def _connect(self):
-        if self.client is None:
+        if self._client is None:
             print("Connecting to CARLA...")
-            self.client = carla.Client(
+            self._client = carla.Client(
                 self.config.get("host", "localhost"), int(self.config.get("port", 2000))
             )
-            self.client.set_timeout(self.config.get("timeout", 10.0))
-            self.world = self.client.get_world()
+            self._client.set_timeout(self.config.get("timeout", 10.0))
+            self._world = self._client.get_world()
             print("Connected to CARLA")
-        print(self.client.get_server_version())
+        print(f"Carla version: {self._client.get_server_version()}")
 
     def _to_carla_yaw(self, yaw_rad: float) -> float:
         return self._yaw_sign * math.degrees(yaw_rad) + self._yaw_offset_deg
@@ -163,8 +170,8 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     def _ensure_world(self, sps: Optional[ScenarioPack]) -> None:
         if self._client is None:
             self._connect()
-        carla_map_name = sps.maps.get("carla_map_name", None)
-        opendrive_path = sps.maps.get("xodr_path", None)
+        carla_map_name = sps.maps.get("carla_map_name", None).path
+        opendrive_path = sps.maps.get("xodr_path", None).path
 
         world = None
         if carla_map_name:
@@ -181,7 +188,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
                 opendrive_str = f.read()
             world = self._client.generate_opendrive_world(
                 opendrive_str,
-                self._carla.OpendriveGenerationParameters(
+                carla.OpendriveGenerationParameters(
                     vertex_distance=2.0,
                     max_road_length=3000.0,
                     wall_height=10.0,
@@ -279,14 +286,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             env["CARLA_ROOT"] = str(self._carla_root)
         return env
 
-    def _ensure_scenario_runner_imports(self, sr_script: Path) -> None:
-        for entry in self._pythonpath_entries(sr_script):
-            if entry not in sys.path:
-                sys.path.append(entry)
-        os.environ.setdefault(
-            "SCENARIO_RUNNER_ROOT", str(self._scenario_runner_root(sr_script))
-        )
-
     def _destroy_spawned_actors(self) -> None:
         if self._world is None:
             return
@@ -321,17 +320,17 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             ego_bp.set_attribute("role_name", self._ego_role_name)
 
         pos = sps.ego.spawn.position
-        loc = self._carla.Location(
+        loc = carla.Location(
             x=float(pos.x),
             y=float(pos.y) * self._yaw_sign,
             z=float(pos.z) + self._spawn_z_offset,
         )
-        rot = self._carla.Rotation(
+        rot = carla.Rotation(
             pitch=math.degrees(float(pos.p)),
             yaw=self._to_carla_yaw(float(pos.h)),
             roll=math.degrees(float(pos.r)),
         )
-        transform = self._carla.Transform(loc, rot)
+        transform = carla.Transform(loc, rot)
 
         ego = self._world.try_spawn_actor(ego_bp, transform)
         if ego is None:
@@ -372,7 +371,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     ) -> None:
         if self._client is None or self._world is None:
             raise RuntimeError("CARLA client/world not available")
-        self._ensure_scenario_runner_imports(sr_script)
 
         CarlaDataProvider.set_client(self._client)
         CarlaDataProvider.set_world(self._world)
@@ -386,7 +384,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         if params:
             openscenario_params = {str(k): str(v) for k, v in params.items()}
 
-        xosc_path = sps.scenarios.get("xosc", None)
+        xosc_path = sps.scenarios.get("xosc", None).path
         if xosc_path is None:
             raise RuntimeError("ScenarioPack has no xosc scenario to run")
         config = OpenScenarioConfiguration(
@@ -528,14 +526,17 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     def _shape_from_actor(self, actor) -> Shape:
         try:
             bb = actor.bounding_box
-            dims = (
-                float(bb.extent.x * 2.0),
-                float(bb.extent.y * 2.0),
-                float(bb.extent.z * 2.0),
+            dims = Shape.Dimension(
+                x=float(bb.extent.x * 2.0),
+                y=float(bb.extent.y * 2.0),
+                z=float(bb.extent.z * 2.0),
             )
             return Shape(type=ShapeType.BOUNDING_BOX, dimensions=dims)
         except Exception:
-            return Shape(type=ShapeType.BOUNDING_BOX, dimensions=(0.0, 0.0, 0.0))
+            return Shape(
+                type=ShapeType.BOUNDING_BOX,
+                dimensions=Shape.Dimension(x=0.0, y=0.0, z=0.0),
+            )
 
     def _get_forward_speed(self, actor) -> float:
         vel = actor.get_velocity()
@@ -589,21 +590,20 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
                 z=float(transform.location.z),
                 yaw=float(yaw),
                 speed=float(speed),
-                accel=float(accel),
+                acceleration=float(accel),
                 yaw_rate=float(yaw_rate),
-                yaw_acc=float(yaw_acc),
+                yaw_acceleration=float(yaw_acc),
             )
-
             obj = self._objects_by_id.get(actor.id)
             if obj is None:
-                obj = ObjectState.create(
+                obj = ObjectState(
                     type=self._actor_type(actor),
                     kinematic=kin,
                     shape=self._shape_from_actor(actor),
                 )
                 self._objects_by_id[actor.id] = obj
             else:
-                obj.update(kin)
+                obj.kinematic.CopyFrom(kin)
 
             return obj
 
@@ -622,11 +622,12 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
     def _apply_ctrl(self, ctrl: CtrlCmd, dt_s: float) -> None:
         if self._ego_vehicle is None:
             return
-        if ctrl is None or ctrl.mode == CtrlMode.None_:
+        if ctrl is None or ctrl.mode == CtrlMode.NONE:
             return
 
+        payload = MessageToDict(ctrl.payload)
+
         if ctrl.mode == CtrlMode.THROTTLE_STEER:
-            payload = ctrl.payload or {}
             if "throttle" in payload or "brake" in payload:
                 throttle = float(payload.get("throttle", 0.0))
                 brake = float(payload.get("brake", 0.0))
@@ -645,14 +646,13 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
                     brake = _clamp(abs(pedal), 0.0, 1.0)
                 steer = _clamp(wheel, -1.0, 1.0)
 
-            control = self._carla.VehicleControl(
+            control = carla.VehicleControl(
                 throttle=throttle, steer=steer * self._yaw_sign, brake=brake
             )
             self._ego_vehicle.apply_control(control)
             return
 
-        if ctrl.mode == CtrlMode.VEL_STEER:
-            payload = ctrl.payload or {}
+        elif ctrl.mode == CtrlMode.VELOCITY_STEER:
             target_speed = float(
                 payload.get("speed", self._get_forward_speed(self._ego_vehicle))
             )
@@ -670,14 +670,11 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
             brake = _clamp(-speed_err * kb, 0.0, 1.0)
 
-            control = self._carla.VehicleControl(
-                throttle=throttle, steer=steer, brake=brake
-            )
+            control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
             self._ego_vehicle.apply_control(control)
             return
 
-        if ctrl.mode == CtrlMode.POSITION:
-            payload = ctrl.payload or {}
+        elif ctrl.mode == CtrlMode.POSITION:
             transform = self._ego_vehicle.get_transform()
             x = float(payload.get("x", transform.location.x))
             y = float(payload.get("y", transform.location.y))
@@ -685,13 +682,13 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             h = float(payload.get("h", self._from_carla_yaw(transform.rotation.yaw)))
             yaw_deg = self._to_carla_yaw(h)
 
-            loc = self._carla.Location(x=x, y=y, z=z)
-            rot = self._carla.Rotation(
+            loc = carla.Location(x=x, y=y, z=z)
+            rot = carla.Rotation(
                 pitch=transform.rotation.pitch,
                 yaw=yaw_deg,
                 roll=transform.rotation.roll,
             )
-            self._ego_vehicle.set_transform(self._carla.Transform(loc, rot))
+            self._ego_vehicle.set_transform(carla.Transform(loc, rot))
             return
 
         logger.warning("Unsupported control mode: %s", ctrl.mode)
