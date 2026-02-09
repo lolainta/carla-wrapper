@@ -18,4 +18,6 @@ COPY . .
 
 ENV PORT=50051
 ENV CARLA_PORT=2000
-ENTRYPOINT [ "/app/entrypoint.sh" ]
+
+ENTRYPOINT [ "/bin/bash" ]
+CMD [ "/app/entrypoint.sh" ]

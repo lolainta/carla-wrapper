@@ -1,4 +1,3 @@
-from asyncio.log import logger
 import grpc
 from concurrent import futures
 import time
@@ -31,6 +30,16 @@ from srunner.scenarios.open_scenario import OpenScenario
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 import py_trees
+
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
@@ -82,7 +91,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             self.config.get("scenario_runner_tm_seed", 0)
         )
 
-        self._sr_manager = None
         self._sr_scenario = None
         self._sr_tree = None
         self._sr_running = False
@@ -429,33 +437,55 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 
     def _stop_scenario_runner_module(self) -> None:
         if (
-            self._sr_manager is None
-            and self._sr_scenario is None
+            self._sr_scenario is None
             and self._sr_tree is None
+            and not self._sr_ego_vehicles
         ):
+            logger.info("ScenarioRunner not running, no need to stop")
             return
-        try:
-            if self._sr_manager is not None:
-                self._sr_manager.cleanup()
-        except Exception:
-            logger.exception("Failed to cleanup ScenarioRunner manager")
+
+        # Explicitly destroy ego vehicles
+        for ego in self._sr_ego_vehicles:
+            if ego is not None and self._world is not None:
+                try:
+                    if ego in self._world.get_actors():
+                        ego.destroy()
+                except Exception:
+                    logger.exception("Failed to destroy ego vehicle %s", ego.id if hasattr(ego, 'id') else 'unknown')
+
+        # Terminate scenario
         try:
             if self._sr_scenario is not None:
                 self._sr_scenario.remove_all_actors()
+                self._sr_scenario.terminate()
+                logger.info("Scenario terminated successfully")
         except Exception:
-            logger.exception("Failed to remove ScenarioRunner actors")
+            logger.exception("Failed to terminate scenario")
+
         try:
-            from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
-
-            CarlaDataProvider.cleanup()
+            if self._sr_tree is not None:
+                self._sr_tree.stop(py_trees.common.Status.INVALID)
+                logger.info("Scenario tree stopped successfully")
         except Exception:
-            logger.exception("Failed to cleanup ScenarioRunner data provider")
+            logger.exception("Failed to stop scenario tree")
 
-        self._sr_manager = None
+        # Clean up data provider
+        try:
+            CarlaDataProvider.cleanup()
+            logger.info("CarlaDataProvider cleaned up successfully")
+        except Exception:
+            logger.exception("Failed to cleanup CarlaDataProvider")
+
+        try:
+            py_trees.blackboard.Blackboard._Blackboard__shared_state.clear()
+            logger.info("Py_trees blackboard cleared")
+        except Exception:
+            logger.exception("Failed to clear blackboard")
         self._sr_scenario = None
         self._sr_tree = None
         self._sr_running = False
         self._sr_ego_vehicles = []
+        logger.info("ScenarioRunner cleanup complete")
 
     def _tick_scenario_runner_module(self) -> None:
         if self._world is None:
@@ -504,7 +534,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 
     def _actor_type(self, actor) -> RoadObjectType:
         type_id = actor.type_id.lower()
-        print(type_id)
         if type_id.startswith("walker.pedestrian"):
             return RoadObjectType.PEDESTRIAN
         if type_id.startswith("vehicle."):
@@ -652,25 +681,36 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             self._ego_vehicle.apply_control(control)
             return
 
-        elif ctrl.mode == CtrlMode.VELOCITY_STEER:
-            target_speed = float(
+        elif ctrl.mode == CtrlMode.ACKERMANN:
+            steer = float(payload.get("steer", 0.0)) * self._yaw_sign
+            speed = float(
                 payload.get("speed", self._get_forward_speed(self._ego_vehicle))
             )
-            steering_angle = float(payload.get("h", 0.0)) * self._yaw_sign
+            acceleration = payload.get("acceleration", None)
+            if acceleration is None:
+                acceleration = float(self.config.get("ackermann_accel_default", 1.5))
+            else:
+                acceleration = float(acceleration)
+            jerk = payload.get("jerk", None)
+            if jerk is None:
+                jerk = float(self.config.get("ackermann_jerk_default", 0.0))
+            else:
+                jerk = float(jerk)
 
             if self._max_steer_rad:
-                steer = _clamp(steering_angle / self._max_steer_rad, -1.0, 1.0)
+                steer = _clamp(steer / self._max_steer_rad, -1.0, 1.0)
             else:
-                steer = _clamp(steering_angle, -1.0, 1.0)
+                steer = _clamp(steer, -1.0, 1.0)
 
             cur_speed = self._get_forward_speed(self._ego_vehicle)
             kp = float(self.config.get("speed_kp", 0.5))
             kb = float(self.config.get("brake_kp", kp))
-            speed_err = target_speed - cur_speed
+            speed_err = speed - cur_speed
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
             brake = _clamp(-speed_err * kb, 0.0, 1.0)
-
-            control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
+            control = carla.VehicleControl(
+                throttle=throttle, steer=steer, brake=brake
+            )
             self._ego_vehicle.apply_control(control)
             return
 
