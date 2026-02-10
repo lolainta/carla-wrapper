@@ -54,6 +54,15 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 
         self._objects_by_id = {}
         self._prev_yaw_rate = {}
+        while self._world is None:
+            try:
+                self._connect()
+            except Exception:
+                logger.exception("Failed to connect to CARLA, retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+            break
+        print("CARLA service initialized")
 
     def Ping(self, request, context):
         return carla_pb2.Pong(msg="CARLA alive")
@@ -64,7 +73,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         pprint(self.config)
 
         self._fixed_delta_seconds = request.dt
-        self._connect()
 
         self._sync = bool(self.config.get("synchronous_mode", True))
         self._no_rendering = bool(self.config.get("no_rendering_mode", False))
@@ -157,9 +165,9 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         if self._client is None:
             print("Connecting to CARLA...")
             self._client = carla.Client(
-                self.config.get("host", "localhost"), int(self.config.get("port", 2000))
+                "localhost", int(os.environ.get("CARLA_PORT", 2000))
             )
-            self._client.set_timeout(self.config.get("timeout", 10.0))
+            self._client.set_timeout(float(os.environ.get("CARLA_TIMEOUT", 5.0)))
             self._world = self._client.get_world()
             print("Connected to CARLA")
         print(f"Carla version: {self._client.get_server_version()}")
