@@ -41,7 +41,6 @@ logging.basicConfig(
 )
 
 
-
 def _clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
@@ -80,10 +79,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         self._spawned_actor_ids: set[int] = set()
         self._scenario_runner_path = self.config.get("scenario_runner_path", None)
         self._ego_role_name = self.config.get("ego_role_name", "hero")
-        self._carla_root = self.config.get("carla_root", None)
-        self._carla_egg = self.config.get("carla_egg", None)
-        self._carla_cache_dir = self.config.get("carla_cache_dir", "/tmp/carla_pyapi")
-        # )
         self._scenario_runner_tm_port = int(
             self.config.get("scenario_runner_tm_port", 8000)
         )
@@ -227,72 +222,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             logger.info("Setting fixed_delta_seconds = %s", self._fixed_delta_seconds)
             settings.fixed_delta_seconds = float(self._fixed_delta_seconds)
         self._world.apply_settings(settings)
-
-    def _pythonpath_entries(self, sr_script: Optional[Path] = None) -> list[str]:
-        entries: list[str] = []
-        if sr_script is not None:
-            entries.append(str(self._scenario_runner_root(sr_script)))
-
-        if self._carla_root:
-            carla_root = Path(self._carla_root)
-            entries.append(str(carla_root / "PythonAPI"))
-            entries.append(str(carla_root / "PythonAPI" / "carla"))
-
-        dist_path = self._resolve_carla_dist_path()
-        if dist_path:
-            entries.append(dist_path)
-
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for entry in entries:
-            if not entry or entry in seen:
-                continue
-            seen.add(entry)
-            deduped.append(entry)
-        return deduped
-
-    def _scenario_runner_root(self, sr_script: Path) -> Path:
-        sr_root = sr_script.parent
-        if sr_root.name == "srunner":
-            sr_root = sr_root.parent
-        return sr_root
-
-    def _resolve_carla_dist_path(self) -> Optional[str]:
-        if not self._carla_egg:
-            return None
-        path = Path(self._carla_egg)
-        if path.is_dir():
-            return str(path)
-        if not path.exists():
-            logger.warning("CARLA Python API path not found: %s", path)
-            return None
-        if zipfile.is_zipfile(path):
-            cache_root = Path(self._carla_cache_dir)
-            cache_dir = cache_root / path.stem
-            carla_pkg_dir = cache_dir / "carla"
-            if not carla_pkg_dir.exists():
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                try:
-                    with zipfile.ZipFile(path, "r") as zf:
-                        zf.extractall(cache_dir)
-                except Exception:
-                    logger.exception("Failed to extract CARLA Python API: %s", path)
-            return str(cache_dir)
-        return str(path)
-
-    def _build_scenario_runner_env(self, sr_script: Path) -> dict[str, str]:
-        env = os.environ.copy()
-        entries = self._pythonpath_entries(sr_script)
-        if entries:
-            existing = env.get("PYTHONPATH", "")
-            python_path = os.pathsep.join(entries + ([existing] if existing else []))
-            env["PYTHONPATH"] = python_path
-        env.setdefault(
-            "SCENARIO_RUNNER_ROOT", str(self._scenario_runner_root(sr_script))
-        )
-        if self._carla_root and "CARLA_ROOT" not in env:
-            env["CARLA_ROOT"] = str(self._carla_root)
-        return env
 
     def _destroy_spawned_actors(self) -> None:
         if self._world is None:
@@ -451,7 +380,10 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
                     if ego in self._world.get_actors():
                         ego.destroy()
                 except Exception:
-                    logger.exception("Failed to destroy ego vehicle %s", ego.id if hasattr(ego, 'id') else 'unknown')
+                    logger.exception(
+                        "Failed to destroy ego vehicle %s",
+                        ego.id if hasattr(ego, "id") else "unknown",
+                    )
 
         # Terminate scenario
         try:
@@ -708,9 +640,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             speed_err = speed - cur_speed
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
             brake = _clamp(-speed_err * kb, 0.0, 1.0)
-            control = carla.VehicleControl(
-                throttle=throttle, steer=steer, brake=brake
-            )
+            control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
             self._ego_vehicle.apply_control(control)
             return
 
