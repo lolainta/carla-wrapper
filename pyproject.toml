@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = "==3.10.*"
 dependencies = [
     "antlr4-python3-runtime==4.10",
-    "carla-api",
     "ephem>=4.2",
     "graphviz>=0.21",
     "matplotlib>=3.10.8",
@@ -15,6 +14,7 @@ dependencies = [
     "opencv-python==4.7.0.72",
     "psutil>=7.2.2",
     "py-trees==0.8.3",
+    "sbsvf-api",
     "shapely==2.1.1",
     "simple-watchdog-timer>=0.1.1",
     "six>=1.17.0",
@@ -27,4 +27,4 @@ include = ["carla_wrapper*"]
 exclude = ["proto*"]
 
 [tool.uv.sources]
-carla-api = { git = "https://github.com/lolainta/carla-api.git" }
+sbsvf-api = { git = "https://github.com/lolainta/sbsvf-api.git" }

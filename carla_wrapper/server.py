@@ -10,16 +10,18 @@ from pprint import pprint
 
 import carla
 
-from carla_api import carla_pb2, carla_pb2_grpc
-from carla_api.scenario_pb2 import ScenarioPack
-from carla_api.object_pb2 import (
+from sbsvf_api import sim_server_pb2, sim_server_pb2_grpc
+from sbsvf_api.pong_pb2 import Pong
+from sbsvf_api.empty_pb2 import Empty
+from sbsvf_api.scenario_pb2 import ScenarioPack
+from sbsvf_api.object_pb2 import (
     ObjectState,
     ObjectKinematic,
     Shape,
     ShapeType,
     RoadObjectType,
 )
-from carla_api.control_pb2 import CtrlCmd, CtrlMode
+from sbsvf_api.control_pb2 import CtrlCmd, CtrlMode
 
 from srunner.scenarioconfigs.openscenario_configuration import (
     OpenScenarioConfiguration,
@@ -45,7 +47,7 @@ def _clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
 
-class CarlaService(carla_pb2_grpc.CarlaSimServicer):
+class CarlaService(sim_server_pb2_grpc.SimServerServicer):
     def __init__(self):
         self._client = None
         self._world = None
@@ -55,16 +57,29 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         self._objects_by_id = {}
         self._prev_yaw_rate = {}
 
+        while self._world is None:
+            try:
+                self._connect()
+            except Exception:
+                logger.exception("Failed to connect to CARLA, retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+            break
+        print("CARLA service initialized")
+
     def Ping(self, request, context):
-        return carla_pb2.Pong(msg="CARLA alive")
+        logger.info(f"Received ping from client: {context.peer()}")
+        return Pong(msg="CARLA alive")
 
     def Init(self, request, context):
         self.config = request.config.config
         self.config = MessageToDict(request.config.config)
         pprint(self.config)
+        self._connect()
+
+        # self._client.set_timeout(float(self.config.get("timeout", 2.0)))
 
         self._fixed_delta_seconds = request.dt
-        self._connect()
 
         self._sync = bool(self.config.get("synchronous_mode", True))
         self._no_rendering = bool(self.config.get("no_rendering_mode", False))
@@ -91,7 +106,9 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         self._sr_running = False
         self._sr_ego_vehicles: list = []
 
-        return carla_pb2.InitResponse(success=True, msg="CARLA initialized")
+        return sim_server_pb2.SimServerMessages.InitResponse(
+            success=True, msg="CARLA initialized"
+        )
 
     def Reset(self, request, context):
         self._output_dir = request.output_dir
@@ -114,11 +131,11 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
             self._world.tick()
         objects = self._collect_objects()
 
-        return carla_pb2.ResetResponse(objects=objects)
+        return sim_server_pb2.SimServerMessages.ResetResponse(objects=objects)
 
     def Step(self, request, context):
         if self._world is None:
-            return carla_pb2.StepResponse()
+            return sim_server_pb2.SimServerMessages.StepResponse()
 
         dt_s = 0.0
         if self._time_ns > 0:
@@ -131,7 +148,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         else:
             self._world.wait_for_tick()
         objects = self._collect_objects()
-        return carla_pb2.StepResponse(objects=objects)
+        return sim_server_pb2.SimServerMessages.StepResponse(objects=objects)
 
     def Stop(self, request, context):
         try:
@@ -148,19 +165,25 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
         self._world = None
         self._client = None
         logger.info("CARLA simulator stopped.")
-        return carla_pb2.Empty()
+        return Empty()
 
     def ShouldQuit(self, request, context):
-        return carla_pb2.ShouldQuitResponse(should_quit=self._quit_flag)
+        return sim_server_pb2.SimServerMessages.ShouldQuitResponse(
+            should_quit=self._quit_flag
+        )
 
     def _connect(self):
-        if self._client is None:
+        if self._world is None:
             print("Connecting to CARLA...")
             self._client = carla.Client(
-                self.config.get("host", "localhost"), int(self.config.get("port", 2000))
+                "localhost", int(os.environ.get("CARLA_PORT", 2000))
             )
-            self._client.set_timeout(self.config.get("timeout", 10.0))
+            self._client.set_timeout(float(os.environ.get("CARLA_TIMEOUT", 10.0)))
             self._world = self._client.get_world()
+            setting = self._world.get_settings()
+            setting.no_rendering_mode = True
+            setting.synchronous_mode = True
+            self._world.apply_settings(setting)
             print("Connected to CARLA")
         print(f"Carla version: {self._client.get_server_version()}")
 
@@ -354,9 +377,6 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 
         self._sr_scenario = scenario
         self._sr_tree = scenario.scenario_tree
-
-        ### Debug: render scenario tree
-        # py_trees.display.render_dot_tree(self._sr_tree, name="ScenarioRunnerTree")
 
         self._sr_ego_vehicles = ego_vehicles
         self._ego_vehicle = ego_vehicles[0] if ego_vehicles else None
@@ -667,7 +687,7 @@ class CarlaService(carla_pb2_grpc.CarlaSimServicer):
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
 
-    carla_pb2_grpc.add_CarlaSimServicer_to_server(CarlaService(), server)
+    sim_server_pb2_grpc.add_SimServerServicer_to_server(CarlaService(), server)
 
     PORT = os.environ.get("PORT", "50051")
 
