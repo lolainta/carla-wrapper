@@ -115,7 +115,7 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
         self._time_ns = 0
         self._quit_flag = False
 
-        self._ensure_world(request.scenario_pack)
+        # self._ensure_world(request.scenario_pack)
         self._apply_world_settings()
         self._destroy_spawned_actors()
         self._stop_scenario_runner_module()
@@ -176,7 +176,8 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
         if self._world is None:
             print("Connecting to CARLA...")
             self._client = carla.Client(
-                "localhost", int(os.environ.get("CARLA_PORT", 2000))
+                os.environ.get("CARLA_HOST", "localhost"),
+                int(os.environ.get("CARLA_PORT", 2000)),
             )
             self._client.set_timeout(float(os.environ.get("CARLA_TIMEOUT", 10.0)))
             self._world = self._client.get_world()
@@ -196,8 +197,10 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
     def _ensure_world(self, sps: Optional[ScenarioPack]) -> None:
         if self._client is None:
             self._connect()
-        carla_map_name = sps.maps.get("carla_map_name", None).path
-        opendrive_path = sps.maps.get("xodr_path", None).path
+
+        carla_map_name = None
+        opendrive_name = sps.map_name
+        opendrive_path = Path(f"/mnt/map/xodr/{opendrive_name}.xodr").resolve()
 
         world = None
         if carla_map_name:
@@ -344,7 +347,8 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
         if params:
             openscenario_params = {str(k): str(v) for k, v in params.items()}
 
-        xosc_path = sps.scenarios.get("xosc", None).path
+        xosc_name = sps.name
+        xosc_path = Path(f"/mnt/scenario/{xosc_name}.xosc").resolve()
         if xosc_path is None:
             raise RuntimeError("ScenarioPack has no xosc scenario to run")
         config = OpenScenarioConfiguration(
