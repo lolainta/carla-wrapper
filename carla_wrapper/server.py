@@ -659,7 +659,7 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
                 steer = _clamp(steer, -1.0, 1.0)
 
             cur_speed = self._get_forward_speed(self._ego_vehicle)
-            kp = float(self.config.get("speed_kp", 0.5))
+            kp = float(self.config.get("speed_kp", 1))
             kb = float(self.config.get("brake_kp", kp))
             speed_err = speed - cur_speed
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
