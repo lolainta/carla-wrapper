@@ -196,9 +196,11 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
     def _ensure_world(self, sps: Optional[ScenarioPack]) -> None:
         if self._client is None:
             self._connect()
-        carla_map_name = sps.maps.get("carla_map_name", None).path
-        opendrive_path = sps.maps.get("xodr_path", None).path
-
+        # carla_map_name = sps.maps.get("carla_map_name", None).path
+        # opendrive_path = sps.maps.get("xodr_path", None).path
+        carla_map_name = None
+        map_name = sps.map_name
+        opendrive_path = Path(f"/mnt/map/xodr/{map_name}.xodr")
         world = None
         if carla_map_name:
             world = self._client.load_world(carla_map_name, reset_settings=False)
@@ -344,7 +346,9 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
         if params:
             openscenario_params = {str(k): str(v) for k, v in params.items()}
 
-        xosc_path = sps.scenarios.get("xosc", None).path
+        xosc_path = Path(sps.scenarios.get("xosc", None).path)
+        xosc_name = xosc_path.stem
+        xosc_path = f"/mnt/scenario/{xosc_name}.xosc"
         if xosc_path is None:
             raise RuntimeError("ScenarioPack has no xosc scenario to run")
         config = OpenScenarioConfiguration(
@@ -655,7 +659,7 @@ class CarlaService(sim_server_pb2_grpc.SimServerServicer):
                 steer = _clamp(steer, -1.0, 1.0)
 
             cur_speed = self._get_forward_speed(self._ego_vehicle)
-            kp = float(self.config.get("speed_kp", 0.5))
+            kp = float(self.config.get("speed_kp", 1))
             kb = float(self.config.get("brake_kp", kp))
             speed_err = speed - cur_speed
             throttle = _clamp(speed_err * kp, 0.0, 1.0)
